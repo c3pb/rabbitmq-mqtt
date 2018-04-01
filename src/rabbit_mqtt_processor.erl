@@ -239,12 +239,7 @@ process_request(?SUBSCRIBE,
         %% if QoS is > 0 then we need to generate a message id,
         %% and increment the counter.
         StartMsgId = safe_max_id(SubscribeMsgId, StateMsgId),
-        N = lists:foldl(fun (Topic, Acc) ->
-                          case maybe_send_retained_message(RPid, Topic, Acc, PState1) of
-                            {true, X} -> Acc + X;
-                            false     -> Acc
-                          end
-                        end, StartMsgId, Topics),
+        N = maybe_send_retained_messages(RPid, StartMsgId, PState1, Topics),
         {ok, PState1#proc_state{message_id = N}}
     end, PState0);
 
@@ -297,34 +292,36 @@ hand_off_to_retainer(RetainerPid, Topic, Msg) ->
   rabbit_mqtt_retainer:retain(RetainerPid, Topic, Msg),
   ok.
 
-maybe_send_retained_message(RPid, #mqtt_topic{name = S, qos = SubscribeQos}, MsgId,
-                            #proc_state{ send_fun = SendFun } = PState) ->
-  case rabbit_mqtt_retainer:fetch(RPid, S) of
-    undefined -> false;
-    Msg       ->
-                %% calculate effective QoS as the lower value of SUBSCRIBE frame QoS
-                %% and retained message QoS. The spec isn't super clear on this, we
-                %% do what Mosquitto does, per user feedback.
-                Qos = erlang:min(SubscribeQos, Msg#mqtt_msg.qos),
-                Id = case Qos of
-                  ?QOS_0 -> undefined;
-                  ?QOS_1 -> MsgId
-                end,
-                SendFun(#mqtt_frame{fixed = #mqtt_frame_fixed{
-                    type = ?PUBLISH,
-                    qos  = Qos,
-                    dup  = false,
-                    retain = Msg#mqtt_msg.retain
-                 }, variable = #mqtt_frame_publish{
-                    message_id = Id,
-                    topic_name = S
-                 },
-                 payload = Msg#mqtt_msg.payload}, PState),
-                 case Qos of
-                   ?QOS_0 -> false;
-                   ?QOS_1 -> {true, 1}
-                 end
-  end.
+maybe_send_retained_messages(RPid, StartMsgId, #proc_state{ send_fun = SendFun } = PState, Topics) ->
+  SendForOneTopic = fun (#mqtt_topic{name = S, qos = SubscribeQos}, StartMsgId2) ->
+    SendForOneMessage = fun (Msg, MsgId) ->
+      %% calculate effective QoS as the lower value of SUBSCRIBE frame QoS
+      %% and retained message QoS. The spec isn't super clear on this, we
+      %% do what Mosquitto does, per user feedback.
+      Qos = erlang:min(SubscribeQos, Msg#mqtt_msg.qos),
+      {Id, NextMsgId} = case Qos of
+        ?QOS_0 -> {undefined, MsgId};
+        ?QOS_1 -> {MsgId, MsgId+1}
+      end,
+      SendFun(#mqtt_frame{fixed = #mqtt_frame_fixed{
+            type = ?PUBLISH,
+            qos  = Qos,
+            dup  = false,
+            retain = Msg#mqtt_msg.retain
+         }, variable = #mqtt_frame_publish{
+            message_id = Id,
+            topic_name = S
+         },
+         payload = Msg#mqtt_msg.payload}, PState),
+      NextMsgId
+    end,
+
+    Msgs = rabbit_mqtt_retainer:fetch(RPid, S),
+    lists:foldl(SendForOneMessage, StartMsgId2, Msgs)
+  end,
+
+  rabbit_log_connection:info("maybe_send_retained_messages: Topics=~p, StartMsgid=~p~n", [Topics, StartMsgId]),
+  lists:foldl(SendForOneTopic, StartMsgId, Topics).
 
 amqp_callback({#'basic.deliver'{ consumer_tag = ConsumerTag,
                                  delivery_tag = DeliveryTag,

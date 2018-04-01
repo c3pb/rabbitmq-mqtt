@@ -49,9 +49,23 @@ insert(Topic, Msg, #store_state{table = T}) ->
   ok.
 
 lookup(Topic, #store_state{table = T}) ->
-  case ets:lookup(T, Topic) of
-    []      -> not_found;
-    [Entry] -> Entry
+  try
+    case re:run(Topic, "[+#]") of
+      nomatch -> ets:lookup(T, Topic);
+      _ ->
+        RegexTopic1 = re:replace(Topic, "[.()\\[\\]\\\\{}]", "\\\\\\0"),
+        RegexTopic2 = re:replace(RegexTopic1, "(^|/)[+]($|/)", "\\1[^/]+\\2"),
+        RegexTopic3 = re:replace(RegexTopic2, "(^|/)[#]($|/)", "\\1.+\\2"),
+        {ok,RegexTopic} = re:compile(["^", RegexTopic3, "$"]),
+        ets:foldl(fun (#retained_message{topic = ThisTopic} = Elem, Acc) ->
+          case re:run(ThisTopic, RegexTopic) of
+            nomatch -> Acc;
+            _       -> [Elem | Acc]
+          end
+        end, [], T)
+    end
+  catch
+    Class:Reason -> lager:error("~nError in lookup for Topic ~p:~s", [Topic, lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])
   end.
 
 delete(Topic, #store_state{table = T}) ->
