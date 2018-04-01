@@ -41,10 +41,7 @@ insert(Topic, Msg, #store_state{table = T}) ->
   ok = dets:insert(T, #retained_message{topic = Topic, mqtt_msg = Msg}).
 
 lookup(Topic, #store_state{table = T}) ->
-  case dets:lookup(T, Topic) of
-    []      -> not_found;
-    [Entry] -> Entry
-  end.
+  dets:lookup(T, Topic).
 
 delete(Topic, #store_state{table = T}) ->
   ok = dets:delete(T, Topic).

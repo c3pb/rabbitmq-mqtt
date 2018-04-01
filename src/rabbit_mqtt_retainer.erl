@@ -84,10 +84,7 @@ handle_cast({clear, Topic},
 
 handle_call({fetch, Topic}, _From,
     State = #retainer_state{store = Store, store_mod = Mod}) ->
-    Reply = case Mod:lookup(Topic, Store) of
-                #retained_message{mqtt_msg = Msg} -> Msg;
-                not_found                         -> undefined
-            end,
+    Reply = lists:map(fun (#retained_message{mqtt_msg = Msg}) -> Msg end, Mod:lookup(Topic, Store)),
     {reply, Reply, State}.
 
 handle_info(stop, State) ->
