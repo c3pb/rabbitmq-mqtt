@@ -310,7 +310,7 @@ maybe_send_retained_messages(RPid, StartMsgId, #proc_state{ send_fun = SendFun }
             retain = Msg#mqtt_msg.retain
          }, variable = #mqtt_frame_publish{
             message_id = Id,
-            topic_name = S
+            topic_name = Msg#mqtt_msg.topic
          },
          payload = Msg#mqtt_msg.payload}, PState),
       NextMsgId
